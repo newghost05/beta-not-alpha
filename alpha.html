@@ -1,0 +1,641 @@
+import { useState, useEffect } from 'react';
+
+export default function AlphaBetaPruning() {
+  // State for tree structure and alpha-beta pruning visualization
+  const [treeDepth, setTreeDepth] = useState(3);
+  const [branchingFactor, setBranchingFactor] = useState(2);
+  const [valueRange, setValueRange] = useState([-10, 10]);
+  const [tree, setTree] = useState(null);
+  const [pruningResult, setPruningResult] = useState(null);
+  const [isAnimating, setIsAnimating] = useState(false);
+  const [animationSpeed, setAnimationSpeed] = useState(1000);
+  const [animationSteps, setAnimationSteps] = useState([]);
+  const [currentStep, setCurrentStep] = useState(0);
+  const [isCustomTree, setIsCustomTree] = useState(false);
+  const [customTreeInput, setCustomTreeInput] = useState(`
+{
+  "value": null,
+  "children": [
+    {
+      "value": null,
+      "children": [
+        { "value": 3, "children": [] },
+        { "value": 5, "children": [] }
+      ]
+    },
+    {
+      "value": null,
+      "children": [
+        { "value": 6, "children": [] },
+        { "value": 9, "children": [] }
+      ]
+    },
+    {
+      "value": null,
+      "children": [
+        { "value": 1, "children": [] },
+        { "value": 2, "children": [] }
+      ]
+    }
+  ]
+}`);
+
+  // Generate a random tree with specified parameters
+  const generateRandomTree = (depth, branching, valueRange) => {
+    if (depth === 0) {
+      return {
+        id: Math.random().toString(36).substr(2, 9),
+        value: Math.floor(Math.random() * (valueRange[1] - valueRange[0] + 1)) + valueRange[0],
+        children: [],
+        visited: false,
+        pruned: false,
+        bestPath: false,
+        alpha: -Infinity,
+        beta: Infinity
+      };
+    }
+
+    const node = {
+      id: Math.random().toString(36).substr(2, 9),
+      value: null,
+      visited: false,
+      pruned: false,
+      bestPath: false,
+      alpha: -Infinity,
+      beta: Infinity,
+      children: []
+    };
+
+    for (let i = 0; i < branching; i++) {
+      node.children.push(generateRandomTree(depth - 1, branching, valueRange));
+    }
+
+    return node;
+  };
+
+  // Parse custom tree input
+  const parseCustomTree = (input) => {
+    try {
+      const parsedTree = JSON.parse(input);
+      return addMetadataToTree(parsedTree);
+    } catch (error) {
+      console.error("Error parsing custom tree:", error);
+      return null;
+    }
+  };
+
+  // Add required metadata to tree nodes
+  const addMetadataToTree = (node) => {
+    const newNode = {
+      ...node,
+      id: Math.random().toString(36).substr(2, 9),
+      visited: false,
+      pruned: false,
+      bestPath: false,
+      alpha: -Infinity,
+      beta: Infinity
+    };
+
+    if (node.children && node.children.length > 0) {
+      newNode.children = node.children.map(child => addMetadataToTree(child));
+    } else {
+      newNode.children = [];
+    }
+
+    return newNode;
+  };
+
+  // Create a new tree based on parameters
+  const createTree = () => {
+    if (isCustomTree) {
+      const customTree = parseCustomTree(customTreeInput);
+      if (customTree) {
+        setTree(customTree);
+      } else {
+        alert("Invalid tree structure. Please check your JSON format.");
+      }
+    } else {
+      setTree(generateRandomTree(treeDepth, branchingFactor, valueRange));
+    }
+  };
+
+  // Alpha-beta pruning algorithm
+  const alphaBetaPruning = (node, depth, alpha, beta, isMaximizingPlayer, steps = []) => {
+    const currentNode = { ...node, alpha, beta };
+    
+    // Mark node as visited
+    currentNode.visited = true;
+    steps.push(JSON.parse(JSON.stringify({ tree: cloneTree(tree, currentNode.id, { visited: true }) })));
+
+    // If node is a leaf node or at maximum depth
+    if (depth === 0 || currentNode.children.length === 0) {
+      currentNode.bestPath = true;
+      return {
+        value: currentNode.value,
+        node: currentNode
+      };
+    }
+
+    let bestChild = null;
+    let bestValue = isMaximizingPlayer ? -Infinity : Infinity;
+
+    // Process each child
+    for (let i = 0; i < currentNode.children.length; i++) {
+      const child = currentNode.children[i];
+      
+      // Recursively evaluate child node
+      const result = alphaBetaPruning(
+        child, 
+        depth - 1, 
+        alpha, 
+        beta, 
+        !isMaximizingPlayer,
+        steps
+      );
+      
+      const childValue = result.value;
+      
+      // Update best value and child based on current player
+      if (isMaximizingPlayer) {
+        if (childValue > bestValue) {
+          bestValue = childValue;
+          bestChild = child.id;
+        }
+        alpha = Math.max(alpha, bestValue);
+        currentNode.alpha = alpha;
+        
+        // Update visualization steps with new alpha
+        steps.push(JSON.parse(JSON.stringify({ 
+          tree: cloneTree(tree, currentNode.id, { alpha })
+        })));
+      } else {
+        if (childValue < bestValue) {
+          bestValue = childValue;
+          bestChild = child.id;
+        }
+        beta = Math.min(beta, bestValue);
+        currentNode.beta = beta;
+        
+        // Update visualization steps with new beta
+        steps.push(JSON.parse(JSON.stringify({ 
+          tree: cloneTree(tree, currentNode.id, { beta })
+        })));
+      }
+      
+      // Alpha-beta pruning check
+      if (beta <= alpha) {
+        // Mark remaining siblings as pruned
+        for (let j = i + 1; j < currentNode.children.length; j++) {
+          const prunedChild = currentNode.children[j];
+          prunedChild.pruned = true;
+          markSubtreePruned(prunedChild);
+          
+          // Add pruning step to visualization
+          steps.push(JSON.parse(JSON.stringify({ 
+            tree: cloneTree(tree, prunedChild.id, { pruned: true }),
+            message: `Pruned subtree: ${beta} <= ${alpha}` 
+          })));
+        }
+        break;
+      }
+    }
+    
+    // Mark best path
+    if (bestChild) {
+      const bestChildNode = currentNode.children.find(c => c.id === bestChild);
+      if (bestChildNode) {
+        bestChildNode.bestPath = true;
+        
+        // Update steps to show best path
+        steps.push(JSON.parse(JSON.stringify({ 
+          tree: cloneTree(tree, bestChildNode.id, { bestPath: true }),
+          message: `Best move for ${isMaximizingPlayer ? 'Max' : 'Min'}: Value ${bestValue}`
+        })));
+      }
+    }
+    
+    // Update node value
+    currentNode.value = bestValue;
+    
+    return {
+      value: bestValue,
+      node: currentNode
+    };
+  };
+
+  // Mark all nodes in a subtree as pruned
+  const markSubtreePruned = (node) => {
+    node.pruned = true;
+    for (const child of node.children) {
+      markSubtreePruned(child);
+    }
+  };
+
+  // Clone tree and update a specific node
+  const cloneTree = (originalTree, nodeId, updates) => {
+    if (!originalTree) return null;
+    
+    const clonedTree = JSON.parse(JSON.stringify(originalTree));
+    
+    const updateNode = (node) => {
+      if (node.id === nodeId) {
+        return { ...node, ...updates };
+      }
+      
+      if (node.children && node.children.length > 0) {
+        node.children = node.children.map(child => updateNode(child));
+      }
+      
+      return node;
+    };
+    
+    return updateNode(clonedTree);
+  };
+
+  // Run alpha-beta pruning algorithm
+  const runAlphaBetaPruning = () => {
+    if (!tree) {
+      createTree();
+      return;
+    }
+    
+    // Reset previous results
+    const resetTree = resetTreeState(JSON.parse(JSON.stringify(tree)));
+    setTree(resetTree);
+    
+    // Run algorithm and capture steps
+    const steps = [];
+    const result = alphaBetaPruning(
+      resetTree, 
+      100, // Large depth to explore entire tree
+      -Infinity, 
+      Infinity, 
+      true, // Start with maximizing player
+      steps
+    );
+    
+    setAnimationSteps(steps);
+    setCurrentStep(0);
+    setPruningResult(result);
+  };
+
+  // Reset tree state for new run
+  const resetTreeState = (node) => {
+    node.visited = false;
+    node.pruned = false;
+    node.bestPath = false;
+    node.alpha = -Infinity;
+    node.beta = Infinity;
+    
+    if (node.children && node.children.length > 0) {
+      node.children = node.children.map(child => resetTreeState(child));
+    }
+    
+    return node;
+  };
+
+  // Start animation of alpha-beta pruning steps
+  const startAnimation = () => {
+    if (animationSteps.length === 0) {
+      runAlphaBetaPruning();
+      return;
+    }
+    
+    setIsAnimating(true);
+    setCurrentStep(0);
+  };
+
+  // Stop animation
+  const stopAnimation = () => {
+    setIsAnimating(false);
+  };
+
+  // Jump to a specific step in the animation
+  const jumpToStep = (step) => {
+    setCurrentStep(step);
+    if (step >= animationSteps.length - 1) {
+      setIsAnimating(false);
+    }
+  };
+
+  // Handle animation progression
+  useEffect(() => {
+    if (!isAnimating) return;
+    
+    if (currentStep >= animationSteps.length - 1) {
+      setIsAnimating(false);
+      return;
+    }
+    
+    const timer = setTimeout(() => {
+      setCurrentStep(prev => prev + 1);
+    }, animationSpeed);
+    
+    return () => clearTimeout(timer);
+  }, [isAnimating, currentStep, animationSteps.length, animationSpeed]);
+
+  // Update tree visualization based on current step
+  useEffect(() => {
+    if (animationSteps.length > 0 && currentStep < animationSteps.length) {
+      setTree(animationSteps[currentStep].tree);
+    }
+  }, [currentStep, animationSteps]);
+
+  // Render a tree node
+  const renderNode = (node, depth = 0, isLeft = false, isRight = false) => {
+    // Calculate styling based on node state
+    let bgColor = "bg-white";
+    let borderColor = "border-gray-300";
+    let textColor = "text-gray-800";
+    
+    if (node.bestPath) {
+      bgColor = "bg-green-100";
+      borderColor = "border-green-500";
+      textColor = "text-green-800";
+    } else if (node.pruned) {
+      bgColor = "bg-red-100";
+      borderColor = "border-red-500";
+      textColor = "text-red-700";
+    } else if (node.visited) {
+      bgColor = "bg-blue-100";
+      borderColor = "border-blue-500";
+      textColor = "text-blue-800";
+    }
+    
+    return (
+      <div key={node.id} className="flex flex-col items-center">
+        <div 
+          className={`${bgColor} ${borderColor} ${textColor} border-2 rounded-lg p-2 m-1 flex flex-col items-center min-w-24 relative`}
+        >
+          <div className="text-sm font-bold">
+            {node.value !== null ? node.value : (node.children.length > 0 ? (depth % 2 === 0 ? "MAX" : "MIN") : "?")}
+          </div>
+          {node.visited && (
+            <div className="text-xs">
+              α: {node.alpha === -Infinity ? "-∞" : node.alpha} β: {node.beta === Infinity ? "∞" : node.beta}
+            </div>
+          )}
+          {node.pruned && (
+            <div className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full p-1">
+              ✕
+            </div>
+          )}
+        </div>
+        
+        {node.children.length > 0 && (
+          <div className="flex flex-row justify-center mt-4 space-x-4">
+            {node.children.map((child, index) => (
+              <div key={index}>
+                {renderNode(
+                  child, 
+                  depth + 1, 
+                  index === 0, 
+                  index === node.children.length - 1
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  return (
+    <div className="flex flex-col p-6 bg-gray-50 rounded-lg shadow-lg max-w-6xl mx-auto">
+      <h1 className="text-2xl font-bold text-gray-800 mb-4">Alpha-Beta Pruning Visualization</h1>
+      
+      <div className="mb-6 bg-white p-4 rounded-md shadow">
+        <h2 className="text-xl font-semibold mb-3">Configuration</h2>
+        
+        <div className="flex mb-4 space-x-4">
+          <label className="flex items-center">
+            <input
+              type="checkbox"
+              checked={isCustomTree}
+              onChange={() => setIsCustomTree(!isCustomTree)}
+              className="mr-2"
+            />
+            <span>Use custom tree</span>
+          </label>
+        </div>
+        
+        {isCustomTree ? (
+          <div className="mb-4">
+            <label className="block mb-2 text-sm font-medium">Custom Tree JSON:</label>
+            <textarea
+              value={customTreeInput}
+              onChange={(e) => setCustomTreeInput(e.target.value)}
+              className="w-full h-48 p-2 border border-gray-300 rounded-md"
+            />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label className="block mb-2 text-sm font-medium">Tree Depth:</label>
+              <input
+                type="number"
+                min="1"
+                max="5"
+                value={treeDepth}
+                onChange={(e) => setTreeDepth(parseInt(e.target.value))}
+                className="w-full p-2 border border-gray-300 rounded-md"
+              />
+            </div>
+            <div>
+              <label className="block mb-2 text-sm font-medium">Branching Factor:</label>
+              <input
+                type="number"
+                min="2"
+                max="4"
+                value={branchingFactor}
+                onChange={(e) => setBranchingFactor(parseInt(e.target.value))}
+                className="w-full p-2 border border-gray-300 rounded-md"
+              />
+            </div>
+            <div>
+              <label className="block mb-2 text-sm font-medium">Value Range:</label>
+              <div className="flex items-center">
+                <input
+                  type="number"
+                  value={valueRange[0]}
+                  onChange={(e) => setValueRange([parseInt(e.target.value), valueRange[1]])}
+                  className="w-full p-2 border border-gray-300 rounded-l-md"
+                />
+                <span className="mx-2">to</span>
+                <input
+                  type="number"
+                  value={valueRange[1]}
+                  onChange={(e) => setValueRange([valueRange[0], parseInt(e.target.value)])}
+                  className="w-full p-2 border border-gray-300 rounded-r-md"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+        
+        <div className="flex flex-wrap gap-3 mt-4">
+          <button
+            onClick={createTree}
+            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
+          >
+            Generate Tree
+          </button>
+          <button
+            onClick={runAlphaBetaPruning}
+            className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700"
+            disabled={!tree}
+          >
+            Run Alpha-Beta Pruning
+          </button>
+        </div>
+      </div>
+      
+      {tree && (
+        <>
+          <div className="mb-6 bg-white p-4 rounded-md shadow overflow-auto">
+            <h2 className="text-xl font-semibold mb-3">Tree Visualization</h2>
+            <div className="flex justify-center overflow-auto p-4">
+              <div className="min-w-max">
+                {renderNode(tree)}
+              </div>
+            </div>
+          </div>
+          
+          <div className="mb-6 bg-white p-4 rounded-md shadow">
+            <h2 className="text-xl font-semibold mb-3">Animation Controls</h2>
+            
+            <div className="mb-4">
+              <label className="block mb-2 text-sm font-medium">Animation Speed (ms):</label>
+              <input
+                type="range"
+                min="200"
+                max="2000"
+                step="100"
+                value={animationSpeed}
+                onChange={(e) => setAnimationSpeed(parseInt(e.target.value))}
+                className="w-full"
+              />
+              <div className="text-center">{animationSpeed} ms</div>
+            </div>
+            
+            <div className="mb-4">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium">Progress:</span>
+                <span className="text-sm">
+                  Step {currentStep + 1} of {animationSteps.length}
+                </span>
+              </div>
+              <input
+                type="range"
+                min="0"
+                max={Math.max(0, animationSteps.length - 1)}
+                value={currentStep}
+                onChange={(e) => jumpToStep(parseInt(e.target.value))}
+                className="w-full"
+                disabled={animationSteps.length === 0}
+              />
+            </div>
+            
+            <div className="flex flex-wrap gap-3">
+              {isAnimating ? (
+                <button
+                  onClick={stopAnimation}
+                  className="bg-red-600 text-white px-4 py-2 rounded-md hover:bg-red-700"
+                >
+                  Pause Animation
+                </button>
+              ) : (
+                <button
+                  onClick={startAnimation}
+                  className="bg-green-600 text-white px-4 py-2 rounded-md hover:bg-green-700"
+                  disabled={!tree}
+                >
+                  Start Animation
+                </button>
+              )}
+              
+              <button
+                onClick={() => jumpToStep(0)}
+                className="bg-gray-600 text-white px-4 py-2 rounded-md hover:bg-gray-700"
+                disabled={currentStep === 0 || animationSteps.length === 0}
+              >
+                Reset
+              </button>
+              
+              <button
+                onClick={() => jumpToStep(animationSteps.length - 1)}
+                className="bg-purple-600 text-white px-4 py-2 rounded-md hover:bg-purple-700"
+                disabled={currentStep === animationSteps.length - 1 || animationSteps.length === 0}
+              >
+                Skip to End
+              </button>
+            </div>
+          </div>
+          
+          <div className="mb-6 bg-white p-4 rounded-md shadow">
+            <h2 className="text-xl font-semibold mb-3">Results</h2>
+            
+            {pruningResult ? (
+              <div>
+                <p className="mb-2">
+                  <span className="font-semibold">Optimal value:</span> {pruningResult.value}
+                </p>
+                <div className="mb-2">
+                  <span className="font-semibold">Color Legend:</span>
+                  <div className="flex flex-wrap gap-4 mt-2">
+                    <div className="flex items-center">
+                      <div className="w-4 h-4 bg-green-100 border border-green-500 rounded mr-2"></div>
+                      <span>Optimal Path</span>
+                    </div>
+                    <div className="flex items-center">
+                      <div className="w-4 h-4 bg-red-100 border border-red-500 rounded mr-2"></div>
+                      <span>Pruned Nodes</span>
+                    </div>
+                    <div className="flex items-center">
+                      <div className="w-4 h-4 bg-blue-100 border border-blue-500 rounded mr-2"></div>
+                      <span>Visited Nodes</span>
+                    </div>
+                  </div>
+                </div>
+                
+                {animationSteps[currentStep]?.message && (
+                  <p className="mt-4 p-2 bg-yellow-100 border border-yellow-300 rounded">
+                    {animationSteps[currentStep].message}
+                  </p>
+                )}
+              </div>
+            ) : (
+              <p>Run the algorithm to see results</p>
+            )}
+          </div>
+          
+          <div className="mb-6 bg-white p-4 rounded-md shadow">
+            <h2 className="text-xl font-semibold mb-3">Deployment Instructions</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <h3 className="text-lg font-medium mb-2">GitHub Deployment:</h3>
+                <ol className="list-decimal list-inside pl-4 space-y-2">
+                  <li>Create a new React app: <code className="bg-gray-100 p-1 rounded">npx create-react-app alpha-beta-visualization</code></li>
+                  <li>Replace the App.js content with this component</li>
+                  <li>Install required dependencies: <code className="bg-gray-100 p-1 rounded">npm install react-dom</code></li>
+                  <li>Create a GitHub repository and push your code</li>
+                </ol>
+              </div>
+              
+              <div>
+                <h3 className="text-lg font-medium mb-2">Vercel Deployment:</h3>
+                <ol className="list-decimal list-inside pl-4 space-y-2">
+                  <li>Sign up for a Vercel account if you don't have one</li>
+                  <li>Connect your GitHub repository to Vercel</li>
+                  <li>Configure the build settings (default settings usually work)</li>
+                  <li>Deploy your application</li>
+                </ol>
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
